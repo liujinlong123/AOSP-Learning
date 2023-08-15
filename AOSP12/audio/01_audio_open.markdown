@@ -140,6 +140,7 @@
     ```
 
     ```c++
+    // AudioFlinger 包含 MmapStreamInterface
     status_t status = MmapStreamInterface::openMmapStream(streamDirection,
                                                           &attributes,
                                                           &config,
@@ -149,4 +150,191 @@
                                                           this, // callback
                                                           mMmapStream,
                                                           &mPortHandle);
+    ```
+
+7. `AAudioServiceEndpointMMap::open`
+    + 位于 `AAudioServiceEndpointMMap.h/cpp`
+    + 位于 `libaaudioservice.so`
+
+    ```c++
+    aaudio_result_t AAudioServiceEndpointMMAP::open()
+    ```
+
+    ```c++
+    aaudio_result_t AAudioServiceEndpointMMAP::open(const aaudio::AAudioStreamRequest &request)
+    ```
+
+    ```c++
+    result = openWithFormat(audioFormat);
+    if (result == AAUDIO_OK) return result;
+    ```
+
+8. `AAudioEndpointManager::openExclusiveEndpoint`
+    + 位于 `AAudioEndpointManager.h/cpp`
+    + 位于 `libaaudioservice.so`
+
+    ```c++
+    sp<AAudioServiceEndpoint> AAudioEndpointManager::openExclusiveEndpoint()
+    ```
+
+    ```c++
+    sp<AAudioServiceEndpoint> AAudioEndpointManager::openExclusiveEndpoint(
+        AAudioService &aaudioService,
+        const aaudio::AAudioStreamRequest &request,
+        sp<AAudioServiceEndpoint> &endpointToSteal)
+    ```
+
+    ```c++
+    sp<AAudioServiceEndpointMMAP> endpointMMap = new AAudioServiceEndpointMMAP(aaudioService);
+    ALOGV("%s(), no match so try to open MMAP %p for dev %d",
+          __func__, endpointMMap.get(), configuration.getDeviceId());
+    endpoint = endpointMMap;
+
+    // 在这里调用
+    aaudio_result_t result = endpoint->open(request);
+    if (result != AAUDIO_OK) {
+        endpoint.clear();
+    } else {
+        mExclusiveStreams.push_back(endpointMMap);
+        mExclusiveOpenCount++;
+    }
+    ```
+
+9. `AAudioEndpointManager::openEndpoint`
+    + 位于 `AAudioEndpointManager.h/cpp`
+    + 位于 `libaaudioservice.so`
+
+    ```c++
+    sp<AAudioServiceEndpoint> AAudioEndpointManager::openEndpoint()
+    ```
+
+    ```c++
+    sp<AAudioServiceEndpoint> AAudioEndpointManager::openEndpoint(AAudioService &audioService, const aaudio::AAudioStreamRequest &request)
+    ```
+
+    ```c++
+    sp<AAudioServiceEndpoint> AAudioEndpointManager::openEndpoint(AAudioService &audioService, const aaudio::AAudioStreamRequest &request) {
+
+        if (request.getConstantConfiguration().getSharingMode() ==  AAUDIO_SHARING_MODE_EXCLUSIVE) {
+            sp<AAudioServiceEndpoint> endpointToSteal;
+
+            // 在这里调用
+            sp<AAudioServiceEndpoint> foundEndpoint =
+                    openExclusiveEndpoint(audioService, request, endpointToSteal);
+            if (endpointToSteal.get()) {
+                endpointToSteal->releaseRegisteredStreams(); // free the MMAP resource
+            }
+            return foundEndpoint;
+        } else {
+            return openSharedEndpoint(audioService, request);
+        }
+    }
+    ```
+
+10. `AAudioServiceStreamBase::open`
+    + 位于 `AAudioServiceStreamBase.h/cpp`
+    + 位于 `libaaudioservice.so`
+
+    ```c++
+    aaudio_result_t AAudioServiceStreamBase::open()
+    ```
+
+    ```c++
+    aaudio_result_t AAudioServiceStreamBase::open(const aaudio::AAudioStreamRequest &request)
+    ```
+
+    ```c++
+    {
+        std::lock_guard<std::mutex> lock(mUpMessageQueueLock);
+        if (mUpMessageQueue != nullptr) {
+            ALOGE("%s() called twice", __func__);
+            return AAUDIO_ERROR_INVALID_STATE;
+        }
+
+        mUpMessageQueue = std::make_shared<SharedRingBuffer>();
+        result = mUpMessageQueue->allocate(sizeof(AAudioServiceMessage),
+                                           QUEUE_UP_CAPACITY_COMMANDS);
+        if (result != AAUDIO_OK) {
+            goto error;
+        }
+
+        // 在这里调用
+        mServiceEndpoint = mEndpointManager.openEndpoint(mAudioService,
+                                                         request);
+        if (mServiceEndpoint == nullptr) {
+            result = AAUDIO_ERROR_UNAVAILABLE;
+            goto error;
+        }
+        // Save a weak pointer that we will use to access the endpoint.
+        mServiceEndpointWeak = mServiceEndpoint;
+
+        mFramesPerBurst = mServiceEndpoint->getFramesPerBurst();
+        copyFrom(*mServiceEndpoint);
+    }
+    ```
+
+11. `AAudioServiceStreamMMap::open`
+    + 位于 `AAudioServiceStreamMMap.h/cpp`
+    + 位于 `libaaudioservice.so`
+
+    ```c++
+    aaudio_result_t AAudioServiceStreamMMAP::open()
+    ```
+
+    ```c++
+    aaudio_result_t AAudioServiceStreamMMAP::open(const aaudio::AAudioStreamRequest &request)
+    ```
+
+    ```c++
+    {
+        if (request.getConstantConfiguration().getSharingMode() != AAUDIO_SHARING_MODE_EXCLUSIVE) {
+            ALOGE("%s() sharingMode mismatch %d", __func__,
+                  request.getConstantConfiguration().getSharingMode());
+            return AAUDIO_ERROR_INTERNAL;
+        }
+
+        // 在这里调用
+        aaudio_result_t result = AAudioServiceStreamBase::open(request);
+        if (result != AAUDIO_OK) {
+            return result;
+        }
+
+        sp<AAudioServiceEndpoint> endpoint = mServiceEndpointWeak.promote();
+        if (endpoint == nullptr) {
+            ALOGE("%s() has no endpoint", __func__);
+            return AAUDIO_ERROR_INVALID_STATE;
+        }
+    }
+    ```
+
+12. `AAudioService::openStream`
+    + 位于 `AAudioService.h/cpp`
+    + 位于 `libaaudioservice.so`
+
+    ```c++
+    Status AAudioService::openStream()
+    ```
+
+    ```c++
+    Status AAudioService::openStream(const StreamRequest &_request, StreamParameters* _paramsOut, int32_t *_aidl_return)
+    ```
+
+    ```c++
+    if (sharingMode == AAUDIO_SHARING_MODE_EXCLUSIVE
+        && AAudioClientTracker::getInstance().isExclusiveEnabled(pid)) {
+        // only trust audioserver for in service indication
+        bool inService = false;
+        if (isCallerInService()) {
+            inService = request.isInService();
+        }
+
+        // 在这里调用
+        serviceStream = new AAudioServiceStreamMMAP(*this, inService);
+        result = serviceStream->open(request);
+        if (result != AAUDIO_OK) {
+            // Clear it so we can possibly fall back to using a shared stream.
+            ALOGW("openStream(), could not open in EXCLUSIVE mode");
+            serviceStream.clear();
+        }
+    }
     ```
