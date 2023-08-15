@@ -1,3 +1,5 @@
+## 进程 audioServer
+
 1. `class AudioPolicyInterface`(virtual - 抽象类必须继承) 
 
     ```c++
@@ -338,3 +340,30 @@
         }
     }
     ```
+
+
+
+## 进程 App
+
+1. `AudioStreamInternal::open`
+    + 位于 `AudioStreamInternal.h/cpp`
+    + 位于 `libaudio_internal.so`
+
+    ```c++
+    aaudio_result_t AudioStreamInternal::open()
+    ```
+
+    ```c++
+    aaudio_result_t AudioStreamInternal::open(const AudioStreamBuilder &builder)
+    ```
+
+    ```c++
+    {
+        // 在这里调用, AAudioServiceInterface &mServiceInterface;
+        mServiceStreamHandle = mServiceInterface.openStream(request, configurationOutput);
+    }
+    ```
+
+    实际上，`AAudioBinderClient` 中的 `openStream` 调用的是 `AAudioBinderClient::Adapter mAdapter` 中的 `openStream`; 其调用的是 `AAudioBinderAdapter` 中的 `openStream`, 其中 `AAudioBinderAdapter` 继承的是 `AAudioServiceInterface`。
+
+2. 
