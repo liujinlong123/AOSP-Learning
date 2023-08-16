@@ -347,7 +347,7 @@
 
 1. `AudioStreamInternal::open`
     + 位于 `AudioStreamInternal.h/cpp`
-    + 位于 `libaudio_internal.so`
+    + 位于 `libaaudio_internal.so`
 
     ```c++
     aaudio_result_t AudioStreamInternal::open()
@@ -366,4 +366,115 @@
 
     实际上，`AAudioBinderClient` 中的 `openStream` 调用的是 `AAudioBinderClient::Adapter mAdapter` 中的 `openStream`; 其调用的是 `AAudioBinderAdapter` 中的 `openStream`, 其中 `AAudioBinderAdapter` 继承的是 `AAudioServiceInterface`。
 
-2. 
+2. `AudioStreamBuilder::build`
+    + 位于 `AudioStreamBuilder.h/cpp`
+    + 位于 `libaaudio_internal.so`
+
+    ```c++
+    aaudio_result_t AudioStreamBuilder::build()
+    ```
+
+    ```c++
+    aaudio_result_t AudioStreamBuilder::build(AudioStream** streamPtr)
+    ```
+
+    ```c++
+    android::sp<AudioStream> audioStream;
+
+    // 在这里创建 audioStream
+    result = builder_createStream(getDirection(), sharingMode, allowMMap, audioStream);
+    if (result == AAUDIO_OK) {
+        
+        // 在这里调用
+        result = audioStream->open(*this);
+        if (result != AAUDIO_OK) {
+            bool isMMap = audioStream->isMMap();
+            if (isMMap && allowLegacy) {
+                ALOGV("%s() MMAP stream did not open so try Legacy path", __func__);
+                // If MMAP stream failed to open then TRY using a legacy stream.
+                result = builder_createStream(getDirection(), sharingMode,
+                                              false, audioStream);
+                if (result == AAUDIO_OK) {
+                    result = audioStream->open(*this);
+                }
+            }
+        }
+        if (result == AAUDIO_OK) {
+            audioStream->registerPlayerBase();
+            audioStream->logOpenActual();
+            *streamPtr = startUsingStream(audioStream);
+        } // else audioStream will go out of scope and be deleted
+    }
+    ```
+
+    ```c++
+    static aaudio_result_t builder_createStream(aaudio_direction_t direction,
+                                         aaudio_sharing_mode_t sharingMode,
+                                         bool tryMMap,
+                                         android::sp<AudioStream> &stream) {
+        aaudio_result_t result = AAUDIO_OK;
+
+        switch (direction) {
+
+            case AAUDIO_DIRECTION_INPUT:
+                if (tryMMap) {
+
+                    // AudioStreamInternalCapture 继承于 AudioStreamInternal
+                    // AudioStreamInternal        继承于 AudioStream
+                    stream = new AudioStreamInternalCapture (AAudioBinderClient::getInstance(), false);
+                } else {
+                    stream = new AudioStreamRecord();
+                }
+                break;
+
+            case AAUDIO_DIRECTION_OUTPUT:
+                if (tryMMap) {
+                    stream = new AudioStreamInternalPlay    (AAudioBinderClient::getInstance(), false);
+                } else {
+                    stream = new AudioStreamTrack();
+                }
+                break;
+
+            default:
+                ALOGE("%s() bad direction = %d", __func__, direction);
+                result = AAUDIO_ERROR_ILLEGAL_ARGUMENT;
+        }
+        return result;
+    }
+    ```
+
+3. `AAudioStreamBuilder_openStream`
+    + 位于 `AAudioStreamBuilder.cpp`
+    + 位于 `libaaudio.so`
+
+    ```c++
+    AAUDIO_API aaudio_result_t  AAudioStreamBuilder_openStream()
+    ```
+
+    ```c++
+    AAUDIO_API aaudio_result_t  AAudioStreamBuilder_openStream(AAudioStreamBuilder* builder, AAudioStream** streamPtr)
+    ```
+
+    ```c++
+    {
+        AudioStream *audioStream = nullptr;
+        aaudio_stream_id_t id = 0;
+        // Please leave these logs because they are very helpful when debugging.
+        ALOGI("%s() called ----------------------------------------", __func__);
+        AudioStreamBuilder *streamBuilder = COMMON_GET_FROM_BUILDER_OR_RETURN   (streamPtr);
+
+        // 在这里调用
+        aaudio_result_t result = streamBuilder->build(&audioStream);
+        if (result == AAUDIO_OK) {
+            *streamPtr = (AAudioStream*) audioStream;
+            id = audioStream->getId();
+        } else {
+            *streamPtr = nullptr;
+        }
+        ALOGI("%s() returns %d = %s for s#%u ----------------",
+            __func__, result, AAudio_convertResultToText(result), id);
+        return result;
+    }
+    ```
+
+4. 
